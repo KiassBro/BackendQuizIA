@@ -1,4 +1,3 @@
-// utils/openai.js → VERSION 100% CORRIGÉE POUR TON SCHEMA FRANÇAIS
 const { OpenAI } = require('openai');
 const prisma = require('../prisma/client');
 
@@ -17,7 +16,7 @@ const callOpenAI = async (prompt, utilisateurId = null, typeAction = 'generer_qu
     const content = response.choices[0].message.content.trim();
     const tokens = response.usage?.total_tokens || 0;
 
-    // ENREGISTRE LE PROMPT DANS LA TABLE prompt_ais (en français !)
+    // ENREGISTRE LE PROMPT DANS LA TABLE prompt_ais 
     await prisma.promptIA.create({
       data: {
         typeAction,
