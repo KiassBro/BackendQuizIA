@@ -1,6 +1,6 @@
-// routes/attempt.js
+// routes/tentative.js → SYSTÈME ÉDUCATIF MALGACHE PARFAIT 2025
 const express = require('express');
-const { protect, admin } = require('../middleware/auth');
+const { protect, enseignant } = require('../middleware/auth');  // enseignant À LA PLACE DE admin
 const { 
   startAttempt, 
   submitAnswers, 
@@ -8,21 +8,22 @@ const {
   getStudentResults, 
   getAllResults 
 } = require('../controllers/tentativeController');
+
 const router = express.Router();
 
-// Démarrer un quiz
+// 1. DÉMARRER UN QUIZ (ÉTUDIANT APPROUVÉ)
 router.post('/start/:quizId', protect, startAttempt);
 
-// Soumettre les réponses + évaluation IA
+// 2. SOUMETTRE LES RÉPONSES
 router.post('/submit', protect, submitAnswers);
 
-// 1. Mes résultats (étudiant connecté)
+// 3. MES RÉSULTATS (ÉTUDIANT)
 router.get('/mes-resultats', protect, getMyResults);
 
-// 2. Résultats d'un étudiant (enseignant ou admin)
-router.get('/resultats/:etudiantId', protect, getStudentResults);
+// 4. RÉSULTATS D'UN ÉTUDIANT (ENSEIGNANT)
+router.get('/resultats/:etudiantId', protect, enseignant, getStudentResults);
 
-// 3. Tous les résultats (admin uniquement)
-router.get('/tous-resultats', protect, admin, getAllResults);
+// 5. TOUS LES RÉSULTATS (ENSEIGNANT)
+router.get('/tous-resultats', protect, enseignant, getAllResults);  // enseignant À LA PLACE DE admin
 
 module.exports = router;

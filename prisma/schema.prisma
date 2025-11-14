@@ -13,96 +13,88 @@ model Utilisateur {
   email           String    @unique
   motDePasse      String
   role            Role      @default(ETUDIANT)
+  estApprouve     Boolean   @default(false)  // En attente d'approbation
   dateInscription DateTime  @default(now())
-  avatar          String?
-  quizzes         Quiz[]
+  quizzes         Quiz[]    // Les quiz qu'il a créés (enseignant)
   tentatives      Tentative[]
-  PromptIAs       PromptIA[]
-
   @@map("utilisateurs")
 }
 
 model Quiz {
-  id              String     @id @default(uuid())
-  titre           String
-  description     String?
-  createurId      String
-  createur        Utilisateur       @relation(fields: [createurId], references: [id])
-  theme           String?
-  niveau          Niveau     @default(INTERMEDIAIRE)
-  questions       Question[]
-  tentatives      Tentative[]
-  duree           Int?
-  estPublic       Boolean    @default(true)
-  estGenereParIA  Boolean    @default(false)
-  dateCreation    DateTime   @default(now())
-
+  id             String     @id @default(uuid())
+  titre          String
+  description    String?
+  createurId     String?    // ← CHANGÉ : ? = optionnel (quiz public sans créateur)
+  createur       Utilisateur? @relation(fields: [createurId], references: [id])
+  theme          String?
+  niveau         Niveau     @default(INTERMEDIAIRE)
+  questions      Question[]
+  tentatives     Tentative[]
+  duree          Int?
+  estPublic      Boolean    @default(true)
+  estGenereParIA Boolean    @default(false)
+  dateCreation   DateTime   @default(now())
   @@map("quizzes")
 }
 
 model Question {
-  id                   String  @id @default(uuid())
-  quizId               String
-  quiz                 Quiz    @relation(fields: [quizId], references: [id])
-  texte                String
-  type                 TypeQuestion
-  options              Json?   // ["A", "B", "C", "D"]
-  reponseCorrecte      Json    // "B" ou ["A", "C"] ou "texte"
-  points               Int     @default(10)
-  explication          String?
-  estGenereeParIA      Boolean @default(false)
-  reponseUtilisateurs  ReponseUtilisateur[]
-
+  id                String             @id @default(uuid())
+  quizId            String
+  quiz              Quiz               @relation(fields: [quizId], references: [id])
+  texte             String
+  type              TypeQuestion
+  options           Json?
+  reponseCorrecte   Json
+  points            Int                @default(10)
+  explication       String?
+  estGenereeParIA   Boolean            @default(false)
+  reponseUtilisateurs ReponseUtilisateur[]
   @@map("questions")
 }
 
 model Tentative {
-  id                   String       @id @default(uuid())
-  utilisateurId        String
-  utilisateur          Utilisateur         @relation(fields: [utilisateurId], references: [id])
-  quizId               String
-  quiz                 Quiz         @relation(fields: [quizId], references: [id])
-  dateDebut            DateTime     @default(now())
-  dateFin              DateTime?
-  scoreTotal           Float?
-  estTermine           Boolean      @default(false)
-  feedbackGlobal       String?
-  reponseUtilisateurs  ReponseUtilisateur[]
-
+  id                 String              @id @default(uuid())
+  utilisateurId      String
+  utilisateur        Utilisateur         @relation(fields: [utilisateurId], references: [id])
+  quizId             String
+  quiz               Quiz                @relation(fields: [quizId], references: [id])
+  dateDebut          DateTime            @default(now())
+  dateFin            DateTime?
+  scoreTotal         Float?
+  estTermine         Boolean             @default(false)
+  feedbackGlobal     String?
+  reponseUtilisateurs ReponseUtilisateur[]
   @@map("tentatives")
 }
 
 model ReponseUtilisateur {
-  id             String  @id @default(uuid())
-  tentativeId    String
-  tentative      Tentative @relation(fields: [tentativeId], references: [id])
-  questionId     String
-  question       Question @relation(fields: [questionId], references: [id])
-  reponseDonnee  Json
-  estCorrecte    Boolean?
-  scoreObtenu    Float?
-  feedbackIA     String?
-
+  id            String   @id @default(uuid())
+  tentativeId   String
+  tentative     Tentative @relation(fields: [tentativeId], references: [id])
+  questionId    String
+  question      Question  @relation(fields: [questionId], references: [id])
+  reponseDonnee Json
+  estCorrecte   Boolean?
+  scoreObtenu   Float?
+  feedbackIA    String?
   @@map("reponse_utilisateurs")
 }
 
 model PromptIA {
-  id           String   @id @default(uuid())
-  typeAction   String
-  promptEnvoye String
-  reponseIA    String
+  id            String    @id @default(uuid())
+  typeAction    String
+  promptEnvoye  String
+  reponseIA     String
   utilisateurId String?
-  utilisateur  Utilisateur?    @relation(fields: [utilisateurId], references: [id])
-  coutTokens   Int?
-  dateAppel    DateTime @default(now())
-
+  utilisateur   Utilisateur? @relation(fields: [utilisateurId], references: [id])
+  coutTokens    Int?
+  dateAppel     DateTime  @default(now())
   @@map("prompt_ais")
 }
 
 enum Role {
   ETUDIANT
   ENSEIGNANT
-  ADMIN
 }
 
 enum Niveau {

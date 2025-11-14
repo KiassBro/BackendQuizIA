@@ -3,64 +3,116 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../prisma/client');
 
 const register = async (req, res) => {
-  const { nom, email, motDePasse, role } = req.body;
+  const { nom, email, motDePasse } = req.body;
 
+  // Validation
   if (!nom || !email || !motDePasse) {
-    return res.status(400).json({ message: 'Tous les champs sont requis' });
+    return res.status(400).json({ 
+      message: 'Nom, email et mot de passe sont requis' 
+    });
   }
 
-  const hashed = await bcrypt.hash(motDePasse, 12);
+  const emailTrimmed = email.toLowerCase().trim();
 
   try {
-    // ✅ CHANGÉ : utilisateur au lieu de user
+    // Vérifie si l'email existe déjà
+    const existe = await prisma.utilisateur.findUnique({
+      where: { email: emailTrimmed }
+    });
+
+    if (existe) {
+      return res.status(400).json({ 
+        message: 'Cet email est déjà utilisé' 
+      });
+    }
+
+    const hashed = await bcrypt.hash(motDePasse, 12);
+
+    // Création de l'étudiant en attente
     const utilisateur = await prisma.utilisateur.create({
       data: {
-        nom,
-        email: email.toLowerCase().trim(),
+        nom: nom.trim(),
+        email: emailTrimmed,
         motDePasse: hashed,
-        role: role?.toUpperCase() || 'ETUDIANT'
+        role: 'ETUDIANT',           // ← Toujours étudiant
+        estApprouve: false          // ← En attente d'approbation
       }
     });
 
-    const token = jwt.sign({ id: utilisateur.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-
     res.status(201).json({
-      token,
-      user: { id: utilisateur.id, nom: utilisateur.nom, email: utilisateur.email, role: utilisateur.role }
+      message: 'Inscription réussie ! En attente d\'approbation par l\'enseignant.',
+      utilisateur: {
+        id: utilisateur.id,
+        nom: utilisateur.nom,
+        email: utilisateur.email,
+        statut: 'en_attente'
+      }
     });
+
   } catch (err) {
-    console.error('Erreur register:', err);
-
-    if (err.code === 'P2002') {
-      return res.status(400).json({ message: 'Cet email est déjà utilisé' });
-    }
-
-    res.status(500).json({ message: 'Erreur serveur', details: err.message });
+    console.error('Erreur inscription:', err);
+    res.status(500).json({ 
+      message: 'Erreur serveur lors de l\'inscription',
+      erreur: err.message 
+    });
   }
 };
 
 const login = async (req, res) => {
   const { email, motDePasse } = req.body;
 
+  if (!email || !motDePasse) {
+    return res.status(400).json({ 
+      message: 'Email et mot de passe requis' 
+    });
+  }
+
+  const emailTrimmed = email.toLowerCase().trim();
+
   try {
-    // ✅ CHANGÉ : utilisateur
     const utilisateur = await prisma.utilisateur.findUnique({
-      where: { email: email.toLowerCase().trim() }
+      where: { email: emailTrimmed }
     });
 
+    // Vérifie identifiants
     if (!utilisateur || !(await bcrypt.compare(motDePasse, utilisateur.motDePasse))) {
-      return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+      return res.status(401).json({ 
+        message: 'Email ou mot de passe incorrect' 
+      });
     }
 
-    const token = jwt.sign({ id: utilisateur.id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    // Vérifie approbation (étudiants seulement)
+    if (utilisateur.role === 'ETUDIANT' && !utilisateur.estApprouve) {
+      return res.status(403).json({ 
+        message: 'Votre compte est en attente d\'approbation par l\'enseignant.' 
+      });
+    }
+
+    // Génère le token
+    const token = jwt.sign(
+      { id: utilisateur.id, role: utilisateur.role }, 
+      process.env.JWT_SECRET, 
+      { expiresIn: '7d' }
+    );
 
     res.json({
+      message: 'Connexion réussie !',
       token,
-      user: { id: utilisateur.id, nom: utilisateur.nom, email: utilisateur.email, role: utilisateur.role }
+      utilisateur: {
+        id: utilisateur.id,
+        nom: utilisateur.nom,
+        email: utilisateur.email,
+        role: utilisateur.role,
+        estApprouve: utilisateur.estApprouve
+      }
     });
+
   } catch (err) {
-    console.error('Erreur login:', err);
-    res.status(500).json({ message: 'Erreur serveur' });
+    console.error('Erreur connexion:', err);
+    res.status(500).json({ 
+      message: 'Erreur serveur lors de la connexion',
+      erreur: err.message 
+    });
   }
 };
 

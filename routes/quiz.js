@@ -1,15 +1,20 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
-const { genererQuizIA, listerQuizPublics, listerMesQuiz } = require('../controllers/quizController');
+const { 
+  genererQuizIA, 
+  listerQuizPublics, 
+  listerMesQuiz 
+} = require('../controllers/quizController');
+
 const router = express.Router();
 
-// Générer un quiz avec IA
+// 1. GÉNÉRER UN QUIZ (ENSEIGNANT UNIQUEMENT)
 router.post('/generate', protect, genererQuizIA);
 
-// Lister TOUS les quiz publics (pour les étudiants)
-router.get('/publics', listerQuizPublics);
+// 2. LISTER LES QUIZ PUBLICS (ÉTUDIANTS APPROUVÉS UNIQUEMENT)
+router.get('/publics', protect, listerQuizPublics);  // protect AJOUTÉ
 
-// Lister MES quiz (seulement ceux que j'ai créés)
+// 3. LISTER MES QUIZ (ENSEIGNANT UNIQUEMENT)
 router.get('/mes-quiz', protect, listerMesQuiz);
 
 module.exports = router;
