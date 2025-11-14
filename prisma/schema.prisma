@@ -17,6 +17,7 @@ model Utilisateur {
   dateInscription DateTime  @default(now())
   quizzes         Quiz[]    // Les quiz qu'il a créés (enseignant)
   tentatives      Tentative[]
+  promptIAs       PromptIA[]
   @@map("utilisateurs")
 }
 

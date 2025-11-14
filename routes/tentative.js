@@ -1,4 +1,3 @@
-// routes/tentative.js → SYSTÈME ÉDUCATIF MALGACHE PARFAIT 2025
 const express = require('express');
 const { protect, enseignant } = require('../middleware/auth');  // enseignant À LA PLACE DE admin
 const { 

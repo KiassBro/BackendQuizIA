@@ -1,4 +1,3 @@
-// controllers/quizController.js → SYSTÈME ÉDUCATIF MALGACHE PARFAIT 2025
 const prisma = require('../prisma/client');
 const { callOpenAI } = require('../utils/openai');
 
