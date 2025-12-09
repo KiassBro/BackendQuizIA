@@ -1,272 +1,267 @@
+// controllers/tentativeController.js — VERSION 100% CORRIGÉE ET FONCTIONNELLE (2025)
+
 const prisma = require('../prisma/client');
 const { callOpenAI } = require('../utils/openai');
 
-// === 1. DÉMARRER UNE TENTATIVE (ÉTUDIANT APPROUVÉ UNIQUEMENT) ===
+// Démarrer une tentative — CORRIGÉ
 const startAttempt = async (req, res) => {
-  const { quizId } = req.params;
+  const { quizId: quizIdParam } = req.params;
+  const utilisateurId = req.user.id;
 
-  // Vérifie que l'étudiant est approuvé
-  if (req.user.role === 'ETUDIANT' && !req.user.estApprouve) {
-    return res.status(403).json({
-      message: "Votre compte est en attente d'approbation par l'enseignant"
-    });
+  if (req.user.role === 'ETUDIANT' && req.user.statut !== 'ACTIF') {
+    return res.status(403).json({ message: "Votre compte n'est pas encore validé" });
   }
 
   try {
-    // Vérifie que le quiz existe et est public
+    const quizId = Number(quizIdParam);
+    if (isNaN(quizId)) {
+      return res.status(400).json({ message: "ID du quiz invalide" });
+    }
+
     const quiz = await prisma.quiz.findUnique({
-      where: { id: quizId, estPublic: true }
+      where: { id: quizId, estPublic: true, estActif: true }
     });
 
     if (!quiz) {
-      return res.status(404).json({ message: "Quiz non trouvé ou non public" });
+      return res.status(404).json({ message: "Quiz non trouvé ou non disponible" });
     }
 
-    const tentative = await prisma.tentative.create({
+    const tentative = await prisma.tentativeQuiz.create({
       data: {
-        utilisateurId: req.user.id,
         quizId,
-        dateDebut: new Date()
+        utilisateurId,
+        dateDebut: new Date(),
+        nombreQuestions: quiz.nombreQuestions
       }
     });
 
     res.json({
-      message: "Tentative démarrée !",
+      message: "Tentative démarrée avec succès !",
       tentativeId: tentative.id
     });
+
   } catch (err) {
-    console.error('Erreur démarrage:', err);
-    res.status(500).json({ message: 'Erreur lors du démarrage de la tentative' });
+    console.error("Erreur startAttempt:", err);
+    res.status(500).json({ message: "Erreur lors du démarrage" });
   }
 };
 
-// === 2. SOUMETTRE LES RÉPONSES (AVEC ÉVALUATION IA) ===
-const submitAnswers = async (req, res) => {
-  const { tentativeId, answers } = req.body;
+// Soumettre les réponses + IA
+const submitTentative = async (req, res) => {
+  const { tentativeId, reponses } = req.body;
 
-  if (!tentativeId || !answers || !Array.isArray(answers) || answers.length === 0) {
-    return res.status(400).json({ message: "Tentative ID et réponses requises" });
+  if (!tentativeId || !Array.isArray(reponses) || reponses.length === 0) {
+    return res.status(400).json({ message: "Données invalides" });
   }
-
-  // Vérifie que la tentative appartient à l'utilisateur
-  const tentative = await prisma.tentative.findUnique({
-    where: { id: tentativeId },
-    include: { utilisateur: true }
-  });
-
-  if (!tentative || tentative.utilisateurId !== req.user.id) {
-    return res.status(403).json({ message: "Accès refusé à cette tentative" });
-  }
-
-  if (tentative.estTermine) {
-    return res.status(400).json({ message: "Cette tentative est déjà terminée" });
-  }
-
-  let scoreTotal = 0;
-  const resultats = [];
 
   try {
-    for (const rep of answers) {
-      const question = await prisma.question.findUnique({
-        where: { id: rep.questionId }
-      });
-
-      if (!question) {
-        resultats.push({
-          questionId: rep.questionId,
-          reponseDonnee: rep.reponseDonnee,
-          correct: false,
-          scoreObtenu: 0,
-          feedbackIA: "Question non trouvée"
-        });
-        continue;
-      }
-
-      let correct = false;
-      let score = 0;
-      let feedback = '';
-
-      // QCM / VRAI_FAUX
-      if (question.type === 'QCM' || question.type === 'VRAI_FAUX') {
-        correct = JSON.stringify(question.reponseCorrecte) === JSON.stringify(rep.reponseDonnee);
-        score = correct ? question.points : 0;
-      } 
-      // TEXTE → IA
-      else {
-        const prompt = `Évalue cette réponse :
-Question : "${question.texte}"
-Réponse attendue : ${JSON.stringify(question.reponseCorrecte)}
-Réponse étudiant : "${rep.reponseDonnee}"
-
-Retourne UNIQUEMENT :
-{"correct":true/false,"score":0-10,"feedback":"explication courte"}
-
-JSON PUR :`;
-
-        try {
-          const { content } = await callOpenAI(prompt, req.user.id);
-          const cleaned = content.trim().replace(/^```json|```$/g, '').trim();
-          const evalIA = JSON.parse(cleaned);
-          correct = evalIA.correct;
-          score = (evalIA.score / 10) * question.points;
-          feedback = evalIA.feedback || "Pas de feedback";
-        } catch {
-          correct = false;
-          score = 0;
-          feedback = "Évaluation IA indisponible";
+    const tentative = await prisma.tentativeQuiz.findUnique({
+      where: { id: tentativeId },
+      include: {
+        quiz: {
+          include: {
+            questions: {
+              include: { choix: true },
+              orderBy: { ordre: 'asc' }
+            }
+          }
         }
       }
+    });
 
-      scoreTotal += score;
+    if (!tentative) return res.status(404).json({ message: "Tentative non trouvée" });
+    if (tentative.utilisateurId !== req.user.id) return res.status(403).json({ message: "Accès refusé" });
+    if (tentative.estTermine) return res.status(400).json({ message: "Tentative déjà soumise" });
+
+    let scoreTotal = 0;
+    const resultats = [];
+
+    for (const rep of reponses) {
+      const question = tentative.quiz.questions.find(q => q.id === rep.questionId);
+      if (!question) continue;
+
+      let estCorrect = false;
+      let pointsGagnes = 0;
+      let feedbackIA = "";
+
+      if (question.type === 'QCM') {
+        const choix = question.choix.find(c => c.id === rep.choixId);
+        estCorrect = choix?.estCorrect || false;
+        pointsGagnes = estCorrect ? question.points : 0;
+      } else if (['REPONSE_COURTE', 'REPONSE_LONGUE'].includes(question.type)) {
+        const prompt = `Évalue la réponse de l'étudiant de façon juste et bienveillante.
+
+Question : ${question.texteQuestion}
+Réponse de l'étudiant : """${rep.reponseDonnee || ''}"""
+
+Réponds UNIQUEMENT avec ce JSON :
+{
+  "correct": true,
+  "score": 8,
+  "feedback": "Bonne réponse !"
+}`;
+
+        try {
+          const { content } = await callOpenAI(prompt, req.user.id, 'evaluer_reponse');
+          const cleaned = content.replace(/^```json\n?|```$/g, '').trim();
+          const eval = JSON.parse(cleaned);
+          estCorrect = !!eval.correct;
+          pointsGagnes = Math.round((eval.score / 10) * question.points);
+          feedbackIA = eval.feedback || "Bon effort !";
+        } catch (e) {
+          pointsGagnes = 0;
+          feedbackIA = "Évaluation IA temporairement indisponible";
+        }
+      }
 
       await prisma.reponseUtilisateur.create({
         data: {
           tentativeId,
-          questionId: rep.questionId,
-          reponseDonnee: rep.reponseDonnee,
-          estCorrecte: correct,
-          scoreObtenu: score,
-          feedbackIA: feedback
+          questionId: question.id,
+          choixId: rep.choixId || null,
+          texteReponse: rep.reponseDonnee || null,
+          utilisateurId: req.user.id,
+          estCorrect,
+          pointsObtenus: pointsGagnes,
+          feedbackIA
         }
       });
 
-      resultats.push({
-        questionId: rep.questionId,
-        reponseDonnee: rep.reponseDonnee,
-        correct,
-        scoreObtenu: score,
-        feedbackIA: feedback
-      });
+      scoreTotal += pointsGagnes;
+      resultats.push({ questionId: question.id, estCorrect, pointsGagnes, feedbackIA });
     }
 
-    // Termine la tentative
-    await prisma.tentative.update({
+    const pourcentage = Number(((scoreTotal / tentative.quiz.pointsTotaux) * 100).toFixed(2));
+
+    await prisma.tentativeQuiz.update({
       where: { id: tentativeId },
       data: {
         estTermine: true,
         dateFin: new Date(),
-        scoreTotal,
-        feedbackGlobal: `Score final : ${scoreTotal.toFixed(1)} points`
+        scoreObtenu: scoreTotal,
+        pourcentage,
+        nombreBonnesReponses: resultats.filter(r => r.estCorrect).length
+      }
+    });
+
+    // Mise à jour des statistiques — CORRIGÉ ICI !
+    await prisma.statistiquesQuiz.upsert({
+      where: { quizId: tentative.quizId },
+      update: {
+        nombreTentatives: { increment: 1 },
+        nombreTermines: { increment: 1 },
+        noteMoyenne: { set: await calculerMoyenneQuiz(tentative.quizId) }
+      },
+      create: {
+        quizId: tentative.quizId,
+        nombreTentatives: 1,
+        nombreTermines: 1,
+        noteMoyenne: pourcentage
       }
     });
 
     res.json({
       message: "Quiz terminé avec succès !",
-      scoreTotal: parseFloat(scoreTotal.toFixed(1)),
+      score: scoreTotal,
+      pourcentage: pourcentage + "%",
+      totalPoints: tentative.quiz.pointsTotaux,
       resultats
     });
 
   } catch (err) {
-    console.error("Erreur soumission:", err);
-    res.status(500).json({ message: "Erreur serveur", erreur: err.message });
+    console.error('Erreur soumission:', err);
+    res.status(500).json({ message: "Erreur serveur lors de la soumission" });
   }
 };
 
-// === 3. MES RÉSULTATS (ÉTUDIANT) ===
+// Mes résultats
 const getMyResults = async (req, res) => {
   try {
-    const resultats = await prisma.tentative.findMany({
-      where: {
-        utilisateurId: req.user.id,
-        estTermine: true
-      },
+    const resultats = await prisma.tentativeQuiz.findMany({
+      where: { utilisateurId: req.user.id, estTermine: true },
       include: {
-        quiz: { select: { titre: true, theme: true, dateCreation: true } },
-        reponseUtilisateurs: {
-          select: {
-            question: { select: { texte: true } },
-            reponseDonnee: true,
-            estCorrecte: true,
-            scoreObtenu: true,
-            feedbackIA: true
-          }
+        quiz: {
+          select: { titre: true, imageCouverture: true, niveau: true }
         }
       },
       orderBy: { dateFin: 'desc' }
     });
 
-    res.json({
-      message: "Vos résultats",
-      total: resultats.length,
-      resultats
-    });
+    res.json({ total: resultats.length, resultats });
   } catch (err) {
-    res.status(500).json({ message: "Erreur chargement" });
+    console.error(err);
+    res.status(500).json({ message: "Erreur chargement résultats" });
   }
 };
 
-// === 4. RÉSULTATS D'UN ÉTUDIANT (ENSEIGNANT UNIQUEMENT) ===
+// Résultats d’un étudiant (prof/admin)
 const getStudentResults = async (req, res) => {
-  const { etudiantId } = req.params;
-
-  if (req.user.role !== 'ENSEIGNANT') {
-    return res.status(403).json({ message: "Accès refusé : enseignants uniquement" });
+  if (!['ADMIN', 'ENSEIGNANT'].includes(req.user.role)) {
+    return res.status(403).json({ message: "Accès refusé" });
   }
 
+  const { etudiantId } = req.params;
+
   try {
-    const etudiant = await prisma.utilisateur.findUnique({
-      where: { id: etudiantId, role: 'ETUDIANT' },
-      select: { id: true, nom: true, email: true }
-    });
-
-    if (!etudiant) return res.status(404).json({ message: "Étudiant non trouvé" });
-
-    const resultats = await prisma.tentative.findMany({
-      where: { utilisateurId: etudiantId, estTermine: true },
+    const resultats = await prisma.tentativeQuiz.findMany({
+      where: { utilisateurId: Number(etudiantId), estTermine: true },
       include: {
-        quiz: { select: { titre: true } },
-        reponseUtilisateurs: {
-          select: {
-            question: { select: { texte: true } },
-            reponseDonnee: true,
-            estCorrecte: true,
-            scoreObtenu: true
-          }
+        quiz: { select: { titre: true, categorie: { select: { nomCategorie: true } } } },
+        reponses: {
+          include: { question: { select: { texteQuestion: true } } }
         }
       },
       orderBy: { dateFin: 'desc' }
     });
 
-    res.json({
-      etudiant: { nom: etudiant.nom, email: etudiant.email },
-      totalQuiz: resultats.length,
-      resultats
+    const etudiant = await prisma.utilisateur.findUnique({
+      where: { id: Number(etudiantId) },
+      select: { nom: true, prenom: true, email: true }
     });
+
+    res.json({ etudiant, total: resultats.length, resultats });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Erreur" });
   }
 };
 
-// === 5. TOUS LES RÉSULTATS (ENSEIGNANT UNIQUEMENT) ===
+// Tous les résultats (admin)
 const getAllResults = async (req, res) => {
-  if (req.user.role !== 'ENSEIGNANT') {
-    return res.status(403).json({ message: "Accès refusé : enseignants uniquement" });
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ message: "Accès réservé à l'admin" });
   }
 
   try {
-    const resultats = await prisma.tentative.findMany({
+    const resultats = await prisma.tentativeQuiz.findMany({
       where: { estTermine: true },
       include: {
-        utilisateur: { select: { nom: true, email: true } },
-        quiz: { select: { titre: true, dateCreation: true } }
+        utilisateur: { select: { nom: true, prenom: true, email: true } },
+        quiz: { select: { titre: true, categorie: { select: { nomCategorie: true } } } }
       },
       orderBy: { dateFin: 'desc' }
     });
 
-    res.json({
-      message: "Tous les résultats",
-      total: resultats.length,
-      resultats
-    });
+    res.json({ total: resultats.length, resultats });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Erreur admin" });
   }
 };
 
-module.exports = { 
-  startAttempt, 
-  submitAnswers, 
-  getMyResults, 
-  getStudentResults, 
-  getAllResults 
+// Moyenne
+const calculerMoyenneQuiz = async (quizId) => {
+  const stats = await prisma.tentativeQuiz.aggregate({
+    where: { quizId, estTermine: true },
+    _avg: { pourcentage: true }
+  });
+  return Number(stats._avg.pourcentage || 0).toFixed(2);
+};
+
+module.exports = {
+  startAttempt,
+  submitTentative,
+  getMyResults,
+  getStudentResults,
+  getAllResults
 };

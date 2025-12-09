@@ -1,60 +1,54 @@
+// controllers/authController.js
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const prisma = require('../prisma/client');
 
 const register = async (req, res) => {
-  const { nom, email, motDePasse } = req.body;
+  const { nom, prenom, email, motDePasse, role = 'ETUDIANT' } = req.body;
 
-  // Validation
   if (!nom || !email || !motDePasse) {
-    return res.status(400).json({ 
-      message: 'Nom, email et mot de passe sont requis' 
-    });
+    return res.status(400).json({ message: 'Nom, email et mot de passe requis' });
   }
 
-  const emailTrimmed = email.toLowerCase().trim();
-
   try {
-    // Vérifie si l'email existe déjà
     const existe = await prisma.utilisateur.findUnique({
-      where: { email: emailTrimmed }
+      where: { email: email.toLowerCase().trim() }
     });
 
     if (existe) {
-      return res.status(400).json({ 
-        message: 'Cet email est déjà utilisé' 
-      });
+      return res.status(400).json({ message: 'Cet email est déjà utilisé' });
     }
 
     const hashed = await bcrypt.hash(motDePasse, 12);
 
-    // Création de l'étudiant en attente
-    const utilisateur = await prisma.utilisateur.create({
+    const nouvelUtilisateur = await prisma.utilisateur.create({
       data: {
         nom: nom.trim(),
-        email: emailTrimmed,
+        prenom: prenom?.trim() || null,
+        email: email.toLowerCase().trim(),
         motDePasse: hashed,
-        role: 'ETUDIANT',           // ← Toujours étudiant
-        estApprouve: false          // ← En attente d'approbation
+        role: role.toUpperCase(), // ETUDIANT, ENSEIGNANT ou ADMIN
+        statut: role === 'ETUDIANT' ? 'EN_ATTENTE' : 'ACTIF' // ← les étudiants attendent validation
       }
     });
 
     res.status(201).json({
-      message: 'Inscription réussie ! En attente d\'approbation par l\'enseignant.',
+      message: role === 'ETUDIANT'
+        ? 'Inscription réussie ! En attente de validation par un enseignant.'
+        : 'Compte créé avec succès !',
       utilisateur: {
-        id: utilisateur.id,
-        nom: utilisateur.nom,
-        email: utilisateur.email,
-        statut: 'en_attente'
+        id: nouvelUtilisateur.id,
+        nom: nouvelUtilisateur.nom,
+        prenom: nouvelUtilisateur.prenom,
+        email: nouvelUtilisateur.email,
+        role: nouvelUtilisateur.role,
+        statut: nouvelUtilisateur.statut
       }
     });
 
   } catch (err) {
     console.error('Erreur inscription:', err);
-    res.status(500).json({ 
-      message: 'Erreur serveur lors de l\'inscription',
-      erreur: err.message 
-    });
+    res.status(500).json({ message: 'Erreur serveur' });
   }
 };
 
@@ -62,36 +56,34 @@ const login = async (req, res) => {
   const { email, motDePasse } = req.body;
 
   if (!email || !motDePasse) {
-    return res.status(400).json({ 
-      message: 'Email et mot de passe requis' 
-    });
+    return res.status(400).json({ message: 'Email et mot de passe requis' });
   }
-
-  const emailTrimmed = email.toLowerCase().trim();
 
   try {
     const utilisateur = await prisma.utilisateur.findUnique({
-      where: { email: emailTrimmed }
+      where: { email: email.toLowerCase().trim() }
     });
 
-    // Vérifie identifiants
     if (!utilisateur || !(await bcrypt.compare(motDePasse, utilisateur.motDePasse))) {
-      return res.status(401).json({ 
-        message: 'Email ou mot de passe incorrect' 
+      return res.status(401).json({ message: 'Email ou mot de passe incorrect' });
+    }
+
+    // Bloque les étudiants en attente
+    if (utilisateur.role === 'ETUDIANT' && utilisateur.statut === 'EN_ATTENTE') {
+      return res.status(403).json({
+        message: 'Votre compte est en attente de validation par un enseignant'
       });
     }
 
-    // Vérifie approbation (étudiants seulement)
-    if (utilisateur.role === 'ETUDIANT' && !utilisateur.estApprouve) {
-      return res.status(403).json({ 
-        message: 'Votre compte est en attente d\'approbation par l\'enseignant.' 
-      });
-    }
+    // Met à jour dernière connexion
+    await prisma.utilisateur.update({
+      where: { id: utilisateur.id },
+      data: { derniereConnexion: new Date() }
+    });
 
-    // Génère le token
     const token = jwt.sign(
-      { id: utilisateur.id, role: utilisateur.role }, 
-      process.env.JWT_SECRET, 
+      { id: utilisateur.id, role: utilisateur.role },
+      process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
@@ -101,18 +93,16 @@ const login = async (req, res) => {
       utilisateur: {
         id: utilisateur.id,
         nom: utilisateur.nom,
+        prenom: utilisateur.prenom,
         email: utilisateur.email,
         role: utilisateur.role,
-        estApprouve: utilisateur.estApprouve
+        statut: utilisateur.statut
       }
     });
 
   } catch (err) {
-    console.error('Erreur connexion:', err);
-    res.status(500).json({ 
-      message: 'Erreur serveur lors de la connexion',
-      erreur: err.message 
-    });
+    console.error('Erreur login:', err);
+    res.status(500).json({ message: 'Erreur serveur' });
   }
 };
 
